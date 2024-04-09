@@ -356,10 +356,10 @@ def main():
     httpd = http.server.HTTPServer(('', port), Handler)
 
     cert_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cert")
-
-    certfile = os.path.join(cert_dir, "server.crt")
+    print(cert_dir)
+    certfile = os.path.join(cert_dir, "server.cert")
     keyfile = os.path.join(cert_dir, "server.key")
-
+    print(certfile, keyfile)
     httpd.socket = ssl.wrap_socket(
         httpd.socket,
         certfile=certfile,

@@ -354,7 +354,6 @@ def main():
     port = 4443
 
     httpd = http.server.HTTPServer(('', port), Handler)
-
     cert_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cert")
     print(cert_dir)
     certfile = os.path.join(cert_dir, "server.cert")

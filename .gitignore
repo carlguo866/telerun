@@ -1,2 +1,5 @@
 queue/cert
 *.pyc
+queue/audit_log.jsonl
+queue/db.sqlite3
+client/auth.json

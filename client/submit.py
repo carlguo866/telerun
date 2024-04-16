@@ -86,7 +86,7 @@ def main():
     username = auth["username"]
     token = auth["token"]
 
-    file_path = args.file
+    source = args.file
     ssl_ctx = ssl.create_default_context(cadata=server_cert)
     job_id = submit_job(username, token, source, ssl_ctx, override_pending=args.override_pending)
     if job_id is None:

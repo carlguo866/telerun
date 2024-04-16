@@ -15,7 +15,7 @@ max_completed_job_age = 60 * 10 # 10 minutes
 max_claimed_job_age = 60 * 10 # 10 minutes
 
 
-JOB_BACKUP_DIR = os.path.join(os.path.abspath(__file__), "backup")
+JOB_BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "job_backup")
 
 def main():
     con = db.connect_to_db()
@@ -56,9 +56,9 @@ def main():
         DELETE FROM jobs
         WHERE username = ? AND state = 'pending'
         ''', (username,))
-
+        print(request_json)
         c.execute('''
-        INSERT INTO jobs (username, submitted_at_iso_8601, data, state)
+        INSERT INTO jobs (username, submitted_at_iso_8601, request_json, state)
         VALUES (?, ?, ?, ?)
         ''', (username, curr_timestamp(), request_json, "pending"))
         
@@ -164,7 +164,7 @@ def main():
     class Handler(http.server.BaseHTTPRequestHandler):
         def _set_headers(self, code=200):
             self.send_response(code)
-            self.send_header('Content-type', 'application/octet-stream')
+            self.send_header('Content-type', 'application/json')
             self.end_headers()
 
         def _authenticate_user(self, username, token):
@@ -226,7 +226,7 @@ def main():
                 }).encode())
 
         def do_POST(self):
-            try:
+            # try:
                 # Get the path and query arguments from the URL
                 url_parts = urlparse(self.path)
                 path = url_parts.path
@@ -251,7 +251,7 @@ def main():
                         # post_data = self.rfile.read(content_length)
                         # post_data = json.loads(post_data.decode())
                         post_data = self.rfile.read(content_length)
-                        with open(os.path.join(JOB_BACKUP_DIR, f"{curr_timestamp}"), "wb") as f:
+                        with open(os.path.join(JOB_BACKUP_DIR, f"{curr_timestamp()}"), "wb") as f:
                             f.write(post_data)
                         
                         audit_log.write(json.dumps({
@@ -350,12 +350,12 @@ def main():
                         "error": "Invalid path"
                     }).encode())
                     return
-            except Exception as e:
-                traceback.print_exc()
-                self._set_headers(400)
-                self.wfile.write(json.dumps({
-                    "error": str(e)
-                }).encode())
+            # except Exception as e:
+            #     traceback.print_exc()
+            #     self._set_headers(400)
+            #     self.wfile.write(json.dumps({
+            #         "error": str(e)
+            #     }).encode())
 
     port = 4443
 
@@ -376,4 +376,5 @@ def main():
     httpd.serve_forever()
 
 if __name__ == "__main__":
+    print(JOB_BACKUP_DIR)
     main()

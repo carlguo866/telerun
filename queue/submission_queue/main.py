@@ -14,6 +14,9 @@ max_submit_size = 1 << 20 # 1 MB
 max_completed_job_age = 60 * 10 # 10 minutes
 max_claimed_job_age = 60 * 10 # 10 minutes
 
+
+JOB_BACKUP_DIR = os.path.join(os.path.abspath(__file__), "backup")
+
 def main():
     con = db.connect_to_db()
 
@@ -55,9 +58,9 @@ def main():
         ''', (username,))
 
         c.execute('''
-        INSERT INTO jobs (username, submitted_at_iso_8601, request_json, state)
+        INSERT INTO jobs (username, submitted_at_iso_8601, data, state)
         VALUES (?, ?, ?, ?)
-        ''', (username, curr_timestamp(), json.dumps(request_json), "pending"))
+        ''', (username, curr_timestamp(), request_json, "pending"))
         
         job_id = c.lastrowid
         
@@ -161,7 +164,7 @@ def main():
     class Handler(http.server.BaseHTTPRequestHandler):
         def _set_headers(self, code=200):
             self.send_response(code)
-            self.send_header('Content-type', 'application/json')
+            self.send_header('Content-type', 'application/octet-stream')
             self.end_headers()
 
         def _authenticate_user(self, username, token):
@@ -245,14 +248,17 @@ def main():
                                 "error": "Request too large"
                             }).encode())
                             return
+                        # post_data = self.rfile.read(content_length)
+                        # post_data = json.loads(post_data.decode())
                         post_data = self.rfile.read(content_length)
-                        post_data = json.loads(post_data.decode())
-
+                        with open(os.path.join(JOB_BACKUP_DIR, f"{curr_timestamp}"), "wb") as f:
+                            f.write(post_data)
+                        
                         audit_log.write(json.dumps({
                             "timestamp": curr_timestamp(),
                             "username": username,
                             "action": "submit",
-                            "request": post_data,
+                            "data_size": content_length
                         }))
                         audit_log.write("\n")
                         audit_log.flush()

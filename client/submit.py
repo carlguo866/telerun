@@ -47,15 +47,18 @@ server_ip_port = "54.227.136.40:4443"
 
 poll_interval = 0.25 # seconds
 
-def submit_job(username, token, source, ssl_ctx, override_pending=False):
+def submit_job(username, token, file_path, ssl_ctx, override_pending=False):
     query_params = {"username": username, "token": token}
     if override_pending:
         query_params["override_pending"] = "1"
     url_query = urllib.parse.urlencode(query_params)
     url = "https://" + server_ip_port + "/api/submit?" + url_query
-    req_json = json.dumps({"source": source}).encode("utf-8")
-    request = urllib.request.Request(url, data=req_json, method="POST")
-    request.add_header("Content-Type", "application/json")
+    
+    with open(file_path, 'rb') as file:
+        file_content = file.read()
+    request = urllib.request.Request(url, data=file_content, method="POST")
+    request.add_header("Content-Type", "application/octet-stream")
+    
     try:
         response = urllib.request.urlopen(request, context=ssl_ctx)
         response_json = json.load(response)
@@ -83,8 +86,7 @@ def main():
     username = auth["username"]
     token = auth["token"]
 
-    with open(args.file, "r") as f:
-        source = f.read()
+    file_path = args.file
     ssl_ctx = ssl.create_default_context(cadata=server_cert)
     job_id = submit_job(username, token, source, ssl_ctx, override_pending=args.override_pending)
     if job_id is None:

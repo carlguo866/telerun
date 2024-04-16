@@ -4,4 +4,4 @@ queue/audit_log.jsonl
 queue/db.sqlite3
 queue/private
 client/auth.json
-backup
+job_backup

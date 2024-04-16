@@ -24,7 +24,7 @@ def init_submission_schema(cur):
         submitted_at_iso_8601 TEXT NOT NULL,
         claimed_at_iso_8601 TEXT,
         completed_at_iso_8601 TEXT,
-        request_json TEXT NOT NULL,
+        request_json BLOB NOT NULL,
         result_json TEXT,
         state TEXT NOT NULL,
         FOREIGN KEY(username) REFERENCES users(username) ON DELETE CASCADE,

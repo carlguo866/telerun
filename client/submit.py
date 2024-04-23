@@ -58,8 +58,7 @@ def submit_job(username, token, file_path, ssl_ctx, override_pending=False):
     with open(file_path, 'rb') as file:
         file_content = file.read()
         base64_encoded = base64.b64encode(file_content).decode("utf-8")
-        json_data = json.dumps(base64_encoded)
-        req_json = json.dumps({"source": json_data}).encode("utf-8")
+        req_json = json.dumps({"source": base64_encoded}).encode("utf-8")
     request = urllib.request.Request(url, data=req_json, method="POST")
     request.add_header("Content-Type", "application/json")
     
@@ -76,13 +75,30 @@ def submit_job(username, token, file_path, ssl_ctx, override_pending=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("file", help="CUDA source file to submit")
     parser.add_argument(
         "--auth",
         help="Authentication token (defaults to ./auth.json in the same directory as this script)",
     )
     parser.add_argument("--override-pending", action="store_true", help="Allow overriding pending jobs")
+    parser.add_argument("file", help="CUDA source file to submit")
+    parser.add_argument('script_args', nargs=argparse.REMAINDER, help='Arguments for the script')
     args = parser.parse_args()
+    
+    
+    remaining_args = []
+    skip_next = False
+    for arg in args.script_args:
+        if arg == '--auth':
+            skip_next = True
+        elif skip_next:
+            args.auth = arg
+        elif arg.startswith('--override-pending'):
+            args.override_pending = True
+        else:
+            remaining_args.append(arg)
+    
+    script_args = ' '.join(remaining_args)
+    print(script_args)
 
     token_path = args.auth or os.path.join(os.path.dirname(__file__), "auth.json")
     with open(token_path, "r") as f:

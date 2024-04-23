@@ -144,10 +144,6 @@ def main():
                 else:
                     print("Job failed.")
                 print()
-                print("--- Compilation log:")
-                print()
-                print(result["compile_log"])
-                print()
                 print("--- Execution log:")
                 print()
                 print(result["execute_log"])

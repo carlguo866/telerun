@@ -73,7 +73,6 @@ class CompleteJob:
     job_id: int
     job_dir: str
     success: bool
-    # compile_log: str
     execute_log: Optional[str] = None
 
 def src_path(job_dir: str) -> str:
@@ -93,36 +92,37 @@ def claim_worker(execute_queue, auth, scratch_dir: str):
     
     while True:
         time.sleep(poll_interval)
-        try:
-            url_query = urllib.parse.urlencode({"executor": auth_name, "token": auth_token})
+        if execute_queue.empty():
+            try:
+                url_query = urllib.parse.urlencode({"executor": auth_name, "token": auth_token})
 
-            req = urllib.request.Request(
-                "https://" + server_ip_port + "/api/claim?" + url_query,
-                method="POST",
-            )
-            with urllib.request.urlopen(req, context=ssl_ctx) as f:
-                response = json.load(f)
-            
-            assert response["success"]
+                req = urllib.request.Request(
+                    "https://" + server_ip_port + "/api/claim?" + url_query,
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, context=ssl_ctx) as f:
+                    response = json.load(f)
+                
+                assert response["success"]
 
-            job_id = response["job_id"]
-            if job_id is None:
+                job_id = response["job_id"]
+                if job_id is None:
+                    continue
+                print("Claimed job", job_id)
+                json_data = json.loads(response["request_json"])
+                source = base64.b64decode(json_data["source"])
+                job_dir = os.path.join(scratch_dir, str(f"job-{job_id}"))
+                os.makedirs(job_dir, exist_ok=True)
+                source_path = bin_path(job_dir)
+                with open(source_path, "wb") as f:
+                    f.write(source)
+
+                job_args = json_data["args"]
+
+                execute_queue.put(ExecuteJob(job_id, job_dir, source_path, job_args))
+            except Exception as e:
+                traceback.print_exc()
                 continue
-            print("Claimed job", job_id)
-            json_data = json.loads(response["request_json"])
-            source = base64.b64decode(json_data["source"])
-            job_dir = os.path.join(scratch_dir, str(f"job-{job_id}"))
-            os.makedirs(job_dir, exist_ok=True)
-            source_path = bin_path(job_dir)
-            with open(source_path, "wb") as f:
-                f.write(source)
-
-            job_args = json_data["args"]
-
-            execute_queue.put(ExecuteJob(job_id, job_dir, source_path, job_args))
-        except Exception as e:
-            traceback.print_exc()
-            continue
 
 def execute_worker(execute_queue, complete_queue, cpu_index: int):
     while True:
@@ -132,7 +132,9 @@ def execute_worker(execute_queue, complete_queue, cpu_index: int):
                 CompleteJob(execute_job.job_id, execute_job.job_dir, success, log)
             )
         )
-        try:
+        # dummy_job = ExecuteJob(-1, "", "", "")
+        # execute_queue.put(dummy_job)
+        try:   
             os.chmod(execute_job.source_path, 0o755)
             args = execute_cmd(execute_job.source_path, execute_job.job_args, cpu_index).split()
             out = subprocess.run(
@@ -154,6 +156,7 @@ def execute_worker(execute_queue, complete_queue, cpu_index: int):
             )
         except Exception as e:
             put_complete(False, "Execution failed with exception:\n" + str(e))
+        # remove_dummy = execute_queue.get()
 
 def truncate_text(text, max_length):
     if len(text) > max_length:

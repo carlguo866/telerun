@@ -9,7 +9,7 @@ import traceback
 import time
 import base64
 
-timeout = 60 # seconds
+timeout = 120 # seconds
 
 server_cert = """
 -----BEGIN CERTIFICATE-----

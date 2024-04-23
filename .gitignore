@@ -4,5 +4,6 @@ queue/audit_log.jsonl
 queue/db.sqlite3
 queue/private
 client/auth.json
+executor/auth.json
 job_backup
 client/rotate

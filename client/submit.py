@@ -9,6 +9,8 @@ import traceback
 import time
 import base64
 
+timeout = 60 # seconds
+
 server_cert = """
 -----BEGIN CERTIFICATE-----
 MIIFmjCCA4KgAwIBAgIUDqUoEkI/a8wLiGh+vZlMnLkpSdswDQYJKoZIhvcNAQEL
@@ -116,9 +118,12 @@ def main():
     print("Submitted job", job_id)
 
     already_claimed = False
-
+    old_time = time.time()
     while True:
         time.sleep(poll_interval)
+        
+        if time.time() - old_time > timeout:
+            raise TimeoutError
         try:
             url_query = urllib.parse.urlencode({"username": username, "token": token, "job_id": job_id})
             req = urllib.request.Request(

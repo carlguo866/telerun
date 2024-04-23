@@ -9,10 +9,10 @@ import traceback
 
 import submission_queue.db as db
 
-max_submit_size = 1 << 20 # 1 MB
+max_submit_size = 3 << 20 # 3 MB
 
-max_completed_job_age = 60 * 10 # 10 minutes
-max_claimed_job_age = 60 * 10 # 10 minutes
+max_completed_job_age = 60 * 5 # 5 minutes
+max_claimed_job_age = 60 * 5 # 5 minutes
 
 
 JOB_BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "job_backup")
@@ -60,7 +60,7 @@ def main():
         c.execute('''
         INSERT INTO jobs (username, submitted_at_iso_8601, request_json, state)
         VALUES (?, ?, ?, ?)
-        ''', (username, curr_timestamp(), request_json, "pending"))
+        ''', (username, curr_timestamp(), json.dumps(request_json), "pending"))
         
         job_id = c.lastrowid
         
@@ -248,9 +248,8 @@ def main():
                                 "error": "Request too large"
                             }).encode())
                             return
-                        # post_data = self.rfile.read(content_length)
-                        # post_data = json.loads(post_data.decode())
                         post_data = self.rfile.read(content_length)
+                        post_data = json.loads(post_data.decode())
                         with open(os.path.join(JOB_BACKUP_DIR, f"{curr_timestamp()}"), "wb") as f:
                             f.write(post_data)
                         
@@ -314,7 +313,7 @@ def main():
                         self.wfile.write(json.dumps({
                             "success": True,
                             "job_id": job_id,
-                            "request_json": json.loads(request_json),
+                            "request_json": request_json,
                         }).encode())
                     else:
                         self.wfile.write(json.dumps({

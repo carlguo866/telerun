@@ -7,6 +7,7 @@ import os
 import json
 import traceback
 import time
+import base64
 
 server_cert = """
 -----BEGIN CERTIFICATE-----
@@ -56,8 +57,11 @@ def submit_job(username, token, file_path, ssl_ctx, override_pending=False):
     
     with open(file_path, 'rb') as file:
         file_content = file.read()
-    request = urllib.request.Request(url, data=file_content, method="POST")
-    request.add_header("Content-Type", "application/octet-stream")
+        base64_encoded = base64.b64encode(file_content).decode("utf-8")
+        json_data = json.dumps(base64_encoded)
+        req_json = json.dumps({"source": json_data}).encode("utf-8")
+    request = urllib.request.Request(url, data=req_json, method="POST")
+    request.add_header("Content-Type", "application/json")
     
     try:
         response = urllib.request.urlopen(request, context=ssl_ctx)

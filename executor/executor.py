@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Optional
 import argparse
 import uuid
+import base64
 import shutil
 
 server_cert = """
@@ -60,33 +61,34 @@ max_log_length = 1 << 20
 
 compute_capability = "86"
 
-@dataclass
-class CompileJob:
-    job_id: int
-    job_dir: str
-    source: str
+# @dataclass
+# class CompileJob:
+#     job_id: int
+#     job_dir: str
+#     source: str
 
 @dataclass
 class ExecuteJob:
     job_id: int
     job_dir: str
-    compile_log: str
+    source_dir: str
+    job_args: str
 
 @dataclass
 class CompleteJob:
     job_id: int
     job_dir: str
     success: bool
-    compile_log: str
+    # compile_log: str
     execute_log: Optional[str] = None
 
 def src_path(job_dir: str) -> str:
-    return os.path.join(job_dir, "src.cu")
+    return os.path.join(job_dir, "execute")
 
 def bin_path(job_dir: str) -> str:
     return os.path.join(job_dir, "bin")
 
-def claim_worker(compile_queue, auth, scratch_dir: str):
+def claim_worker(execute_queue, auth, scratch_dir: str):
     ssl_ctx = ssl.create_default_context(cadata=server_cert)
     
     auth_name = auth["executor"]
@@ -110,70 +112,78 @@ def claim_worker(compile_queue, auth, scratch_dir: str):
             if job_id is None:
                 continue
             print("Claimed job", job_id)
-
-            source = response["request_json"]["source"]
-
+            json_data = json.loads(response["request_json"])
+            source = base64.b64decode(json_data["source"])
             job_dir = os.path.join(scratch_dir, str(f"job-{job_id}"))
+            if not os.path.exists(job_dir):
+                os.makedirs(job_dir)
+            source_dir = bin_path(job_dir)
+            with open(source_dir, "wb") as f:
+                f.write(source)
 
-            compile_queue.put(CompileJob(job_id, job_dir, source))
+            job_args = json_data["args"]
+
+            execute_queue.put(ExecuteJob(job_id, job_dir, source_dir, job_args))
         except Exception as e:
             traceback.print_exc()
             continue
 
-def compile_worker(compile_queue, complete_queue, execute_queue):
-    while True:
-        compile_job: CompileJob = compile_queue.get()
-        put_fail = (
-            lambda log: complete_queue.put(
-                CompleteJob(compile_job.job_id, compile_job.job_dir, False, log, None)
-            )
-        )
-        try:
-            os.makedirs(compile_job.job_dir, exist_ok=True)
-            with open(src_path(compile_job.job_dir), "w") as f:
-                f.write(compile_job.source)
-            out = subprocess.run(
-                [
-                    "nvcc",
-                    "-O3",
-                    "-use_fast_math",
-                    f"-arch=compute_{compute_capability}",
-                    f"-code=sm_{compute_capability}",
-                    "-o", bin_path(compile_job.job_dir),
-                    src_path(compile_job.job_dir),
-                ],
-                timeout=compile_timeout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            if out.returncode == 0:
-                execute_queue.put(ExecuteJob(compile_job.job_id, compile_job.job_dir, out.stdout))
-            else:
-                put_fail(out.stdout)
-        except subprocess.TimeoutExpired:
-            put_fail(
-                f"Compilation timed out after {compile_timeout} seconds. Output log:\n\n" + out.stdout
-            )
-        except Exception as e:
-            put_fail("Compilation failed with exception:\n" + str(e))
+# def compile_worker(compile_queue, complete_queue, execute_queue):
+#     while True:
+#         compile_job: CompileJob = compile_queue.get()
+#         put_fail = (
+#             lambda log: complete_queue.put(
+#                 CompleteJob(compile_job.job_id, compile_job.job_dir, False, log, None)
+#             )
+#         )
+#         try:
+#             os.makedirs(compile_job.job_dir, exist_ok=True)
+#             with open(src_path(compile_job.job_dir), "w") as f:
+#                 f.write(compile_job.source)
+#             out = subprocess.run(
+#                 [
+#                     "nvcc",
+#                     "-O3",
+#                     "-use_fast_math",
+#                     f"-arch=compute_{compute_capability}",
+#                     f"-code=sm_{compute_capability}",
+#                     "-o", bin_path(compile_job.job_dir),
+#                     src_path(compile_job.job_dir),
+#                 ],
+#                 timeout=compile_timeout,
+#                 stdout=subprocess.PIPE,
+#                 stderr=subprocess.STDOUT,
+#                 text=True,
+#             )
+#             if out.returncode == 0:
+#                 execute_queue.put(ExecuteJob(compile_job.job_id, compile_job.job_dir, out.stdout))
+#             else:
+#                 put_fail(out.stdout)
+#         except subprocess.TimeoutExpired:
+#             put_fail(
+#                 f"Compilation timed out after {compile_timeout} seconds. Output log:\n\n" + out.stdout
+#             )
+#         except Exception as e:
+#             put_fail("Compilation failed with exception:\n" + str(e))
 
 def execute_worker(execute_queue, complete_queue, gpu_index: int):
     while True:
         execute_job: ExecuteJob = execute_queue.get()
         put_complete = (
             lambda success, log: complete_queue.put(
-                CompleteJob(execute_job.job_id, execute_job.job_dir, success, execute_job.compile_log, log)
+                CompleteJob(execute_job.job_id, execute_job.job_dir, success, log)
             )
         )
         try:
+            executable = bin_path(execute_job.job_dir)
+            os.chmod(executable, 0o755)
+            args = execute_job.job_args.split()
             out = subprocess.run(
-                [bin_path(execute_job.job_dir)],
+                [executable] + args,
                 timeout=execute_timeout,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                env={**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu_index)},
                 cwd=execute_job.job_dir,
             )
             if out.returncode == 0:
@@ -213,7 +223,7 @@ def complete_worker(complete_queue, auth):
             completion_data = json.dumps({
                 "result_json": {
                     "success": completion.success,
-                    "compile_log": truncate_text(completion.compile_log, max_log_length),
+                    # "compile_log": truncate_text(completion.compile_log, max_log_length),
                     "execute_log": truncate_text(completion.execute_log, max_log_length),
                 }
             }).encode("utf-8")
@@ -231,7 +241,7 @@ def complete_worker(complete_queue, auth):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--nproc-compile", type=int, required=True)
+    # parser.add_argument("--nproc-compile", type=int, required=True)
     parser.add_argument("--nproc-execute", type=int, required=True)
     parser.add_argument(
         "--auth",
@@ -252,19 +262,19 @@ def main():
     scratch_dir = os.path.join(args.scratch_dir, f"executor-{scratch_uuid}")
     os.makedirs(scratch_dir, exist_ok=True)
 
-    compile_queue = multiprocessing.Queue(1)
+    # compile_queue = multiprocessing.Queue(1)
     execute_queue = multiprocessing.Queue(1)
     complete_queue = multiprocessing.Queue(1)
 
-    claim_proc = multiprocessing.Process(target=claim_worker, args=(compile_queue, auth, scratch_dir))
+    claim_proc = multiprocessing.Process(target=claim_worker, args=(execute_queue, auth, scratch_dir))
     claim_proc.start()
 
-    compile_procs = [
-        multiprocessing.Process(target=compile_worker, args=(compile_queue, complete_queue, execute_queue))
-        for _ in range(args.nproc_compile)
-    ]
-    for proc in compile_procs:
-        proc.start()
+    # compile_procs = [
+    #     multiprocessing.Process(target=compile_worker, args=(compile_queue, complete_queue, execute_queue))
+    #     for _ in range(args.nproc_compile)
+    # ]
+    # for proc in compile_procs:
+    #     proc.start()
     
     execute_procs = [
         multiprocessing.Process(target=execute_worker, args=(execute_queue, complete_queue, i))

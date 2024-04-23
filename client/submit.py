@@ -100,7 +100,6 @@ def main():
             remaining_args.append(arg)
     
     script_args = ' '.join(remaining_args)
-    print(script_args)
 
     token_path = args.auth or os.path.join(os.path.dirname(__file__), "auth.json")
     with open(token_path, "r") as f:
@@ -138,7 +137,8 @@ def main():
                 continue
             elif state == "claimed":
                 if not already_claimed:
-                    print("Compiling and running")
+                    print("Compiling and running, took {:.2f} seconds to be claimed.".format(time.time() - old_time)) 
+                    print("This may take a while, please do not close this window, as your job will be lost.")
                     already_claimed = True
                 continue
             elif state == "complete":

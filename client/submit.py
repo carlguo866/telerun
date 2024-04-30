@@ -120,11 +120,12 @@ def main():
     already_claimed = False
     old_time = time.time()
     while True:
-        time.sleep(poll_interval)
         
         if time.time() - old_time > timeout:
-            raise TimeoutError
+            print("Time limit exceeded.")
+            break
         try:
+            time.sleep(poll_interval)
             url_query = urllib.parse.urlencode({"username": username, "token": token, "job_id": job_id})
             req = urllib.request.Request(
                 "https://" + server_ip_port + "/api/status?" + url_query,
@@ -154,6 +155,18 @@ def main():
                 print()
                 print(result["execute_log"])
                 break
+        except KeyboardInterrupt as e: 
+            print("Keyboard Interrupted. Remove job from server.")
+            url_query = urllib.parse.urlencode({"username": username, "token": token, "job_id": job_id})
+            req = urllib.request.Request(
+                "https://" + server_ip_port + "/api/delete?" + url_query,
+                method="POST",
+            )
+            with urllib.request.urlopen(req, context=ssl_ctx) as f:
+                response = json.load(f)
+                if response["success"]:
+                    print("Job removed successfully.")
+            break
         except Exception as e:
             traceback.print_exc()
             continue

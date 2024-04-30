@@ -43,6 +43,11 @@ def init_submission_schema(cur):
                 claimed_at_iso_8601 IS NOT NULL AND
                 completed_at_iso_8601 IS NOT NULL AND
                 result_json IS NOT NULL
+            ) OR 
+            (state = 'reported' AND
+                claimed_at_iso_8601 IS NOT NULL AND
+                completed_at_iso_8601 IS NOT NULL AND
+                result_json IS NOT NULL
             )
         )
     )

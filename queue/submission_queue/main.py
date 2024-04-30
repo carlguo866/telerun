@@ -66,13 +66,35 @@ def main():
         
         return job_id
     
-    def delete_job(job_id):
+    def delete_pending_job(job_id):
         c = con.cursor()
 
         c.execute('''
         DELETE FROM jobs
-        WHERE id = ?
+        WHERE id = ? AND state = 'pending'
         ''', (job_id,))
+        
+    def set_job_state(job_id, state):
+        c = con.cursor()
+
+        c.execute('''
+        UPDATE jobs
+        SET state = ?
+        WHERE id = ?
+        ''', (state, job_id))
+        
+    def get_last_completed_job(username): 
+        c = con.cursor()
+        
+        c.execute('''
+        SELECT id FROM jobs
+        WHERE username = ? AND state = 'complete'
+        ORDER BY completed_at_iso_8601 DESC
+        LIMIT 1;
+        ''', (username, ))
+        
+        result = c.fetchone()
+        return result
 
     def claim_job(executor):
         c = con.cursor()
@@ -212,6 +234,31 @@ def main():
                         "result": result_json,
                     }).encode())
                     return
+                elif path.startswith("/api/last_complete"): 
+                    with con: 
+                        garbage_collect() 
+                        username = query_args["username"][0]
+                        token = query_args["token"][0]
+                        if not self._authenticate_user(username, token):
+                            return
+                        job_id = get_last_completed_job(username)
+                        success = job_id is not None
+                        if success: 
+                            job_id = job_id[0]
+                            state, result_json = get_job_status(job_id)
+                            set_job_state(job_id, "reported")
+                        else: 
+                            state, result_json = '', ''
+                        
+                            
+                    self._set_headers()
+                    self.wfile.write(json.dumps({
+                        "success": success,
+                        "state": state,
+                        "result": result_json,
+                    }).encode())
+                    return
+                        
                 else:
                     self._set_headers(404)
                     self.wfile.write(json.dumps({
@@ -288,9 +335,32 @@ def main():
                             return
                         
                         job_id = query_args["job_id"][0]
+                        
+                        state, result_json = get_job_status(job_id)
+                        success = state == 'pending'
+                        if success:
+                            delete_pending_job(job_id)
+                            
 
-                        delete_job(job_id)
-
+                    self._set_headers()
+                    self.wfile.write(json.dumps({
+                        "success": success,
+                    }).encode())
+                    return
+                elif path.startswith("/api/reported"): 
+                    with con: 
+                        garbage_collect() 
+                        username = query_args["username"][0]
+                        token = query_args["token"][0]
+                        if not self._authenticate_user(username, token):
+                            return
+                        
+                        job_id = query_args["job_id"][0] 
+                        state, result_json = get_job_status(job_id)
+                        
+                        assert state == "complete"
+                        set_job_state(job_id, "reported")
+                        
                     self._set_headers()
                     self.wfile.write(json.dumps({
                         "success": True,

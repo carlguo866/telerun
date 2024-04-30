@@ -297,8 +297,8 @@ def main():
                             return
                         post_data = self.rfile.read(content_length)
                         post_data = json.loads(post_data.decode())
-                        with open(os.path.join(JOB_BACKUP_DIR, f"{curr_timestamp()}.json"), "w") as f:
-                            f.write(json.dumps(post_data))
+                        # with open(os.path.join(JOB_BACKUP_DIR, f"{curr_timestamp()}.json"), "w") as f:
+                        #     f.write(json.dumps(post_data))
                         
                         audit_log.write(json.dumps({
                             "timestamp": curr_timestamp(),

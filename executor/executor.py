@@ -85,7 +85,31 @@ def bin_path(job_dir: str) -> str:
 def execute_cmd(job_path: str, args: str, cpu_num: int ) -> str: 
     return f"taskset -c {cpu_num}-{cpu_num} numactl -i all {job_path} {args}"
 
-def claim_worker(execute_queue, auth, scratch_dir: str):
+
+def get_job(auth_name, auth_token, ssl_ctx):
+    url_query = urllib.parse.urlencode({"executor": auth_name, "token": auth_token})
+
+    req = urllib.request.Request(
+        "https://" + server_ip_port + "/api/claim?" + url_query,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, context=ssl_ctx) as f:
+        response = json.load(f)
+    assert response["success"]
+    return response
+
+def load_job_data(response, job_id, scratch_dir: str):
+    json_data = json.loads(response["request_json"])
+    source = base64.b64decode(json_data["source"])
+    job_dir = os.path.join(scratch_dir, str(f"job-{job_id}"))
+    os.makedirs(job_dir, exist_ok=True)
+    source_path = bin_path(job_dir)
+    with open(source_path, "wb") as f:
+        f.write(source)
+
+    return job_dir, source_path, json_data["args"]
+
+def main_runner(auth, scratch_dir: str):
     ssl_ctx = ssl.create_default_context(cadata=server_cert)
     
     auth_name = auth["executor"]
@@ -93,71 +117,48 @@ def claim_worker(execute_queue, auth, scratch_dir: str):
     
     while True:
         time.sleep(poll_interval)
-        if execute_queue.empty():
-            try:
-                url_query = urllib.parse.urlencode({"executor": auth_name, "token": auth_token})
-
-                req = urllib.request.Request(
-                    "https://" + server_ip_port + "/api/claim?" + url_query,
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, context=ssl_ctx) as f:
-                    response = json.load(f)
-                
-                assert response["success"]
-
-                job_id = response["job_id"]
-                if job_id is None:
-                    continue
-                print("Claimed job", job_id)
-                json_data = json.loads(response["request_json"])
-                source = base64.b64decode(json_data["source"])
-                job_dir = os.path.join(scratch_dir, str(f"job-{job_id}"))
-                os.makedirs(job_dir, exist_ok=True)
-                source_path = bin_path(job_dir)
-                with open(source_path, "wb") as f:
-                    f.write(source)
-
-                job_args = json_data["args"]
-
-                execute_queue.put(ExecuteJob(job_id, job_dir, source_path, job_args))
-            except Exception as e:
-                traceback.print_exc()
+        # if execute_queue.empty():
+        try:
+            response = get_job(auth_name, auth_token, ssl_ctx)
+            job_id = response["job_id"]
+            if job_id is None:
                 continue
+            print("Claimed job", job_id)
+            
+            job_dir, source_path, job_args = load_job_data(response, job_id, scratch_dir)
 
-def execute_worker(execute_queue, complete_queue, cpu_index: int):
-    while True:
-        execute_job: ExecuteJob = execute_queue.get()
-        put_complete = (
-            lambda success, log: complete_queue.put(
-                CompleteJob(execute_job.job_id, execute_job.job_dir, success, log)
-            )
-        )
-        # dummy_job = ExecuteJob(-1, "", "", "")
-        # execute_queue.put(dummy_job)
-        try:   
-            os.chmod(execute_job.source_path, 0o755)
-            args = execute_cmd(execute_job.source_path, execute_job.job_args, cpu_index).split()
-            out = subprocess.run(
-                args,
-                timeout=execute_timeout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                cwd=execute_job.job_dir,
-            )
-            if out.returncode == 0:
-                put_complete(True, out.stdout)
-            else:
-                put_complete(False, out.stdout)
-        except subprocess.TimeoutExpired:
-            put_complete(
-                False,
-                f"Execution timed out after {execute_timeout} seconds. Output log:\n\n" + out.stdout,
-            )
+            complete_job = execute_worker(ExecuteJob(job_id, job_dir, source_path, job_args), 1)
+            complete_worker(complete_job, auth)
         except Exception as e:
-            put_complete(False, "Execution failed with exception:\n" + str(e))
-        # remove_dummy = execute_queue.get()
+            traceback.print_exc()
+            continue
+
+def execute_worker(execute_job: ExecuteJob, cpu_index: int):
+    def put_complete(success, log):
+        return CompleteJob(execute_job.job_id, execute_job.job_dir, success, log)
+
+    try:   
+        os.chmod(execute_job.source_path, 0o755)
+        args = execute_cmd(execute_job.source_path, execute_job.job_args, cpu_index).split()
+        out = subprocess.run(
+            args,
+            timeout=execute_timeout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=execute_job.job_dir,
+        )
+        if out.returncode == 0:
+            return put_complete(True, out.stdout)
+        else:
+            return put_complete(False, out.stdout)
+    except subprocess.TimeoutExpired:
+        return put_complete(
+            False,
+            f"Execution timed out after {execute_timeout} seconds. Output log:\n\n" + out.stdout,
+        )
+    except Exception as e:
+        return put_complete(False, "Execution failed with exception:\n" + str(e))
 
 def truncate_text(text, max_length):
     if len(text) > max_length:
@@ -165,43 +166,43 @@ def truncate_text(text, max_length):
     else:
         return text
 
-def complete_worker(complete_queue, auth):
+def complete_worker(completion: CompleteJob, auth):
     ssl_ctx = ssl.create_default_context(cadata=server_cert)
 
     auth_name = auth["executor"]
     auth_token = auth["token"]
 
-    while True:
-        completion: CompleteJob = complete_queue.get()
-        try:
-            shutil.rmtree(completion.job_dir, ignore_errors=True)
 
-            completion_req_query = urllib.parse.urlencode({"executor": auth_name, "token": auth_token, "job_id": completion.job_id})
+    try:
+        shutil.rmtree(completion.job_dir, ignore_errors=True)
 
-            if completion.execute_log is None:
-                completion.execute_log = ""
+        completion_req_query = urllib.parse.urlencode({"executor": auth_name, "token": auth_token, "job_id": completion.job_id})
 
-            completion_data = json.dumps({
-                "result_json": {
-                    "success": completion.success,
-                    "execute_log": truncate_text(completion.execute_log, max_log_length),
-                }
-            }).encode("utf-8")
+        if completion.execute_log is None:
+            completion.execute_log = ""
 
-            completion_req = urllib.request.Request(
-                "https://" + server_ip_port + "/api/complete?" + completion_req_query,
-                data=completion_data,
-                method="POST",
-            )
-            with urllib.request.urlopen(completion_req, context=ssl_ctx) as f:
-                pass
-        except Exception as e:
-            traceback.print_exc()
-            continue
+        completion_data = json.dumps({
+            "result_json": {
+                "success": completion.success,
+                "execute_log": truncate_text(completion.execute_log, max_log_length),
+            }
+        }).encode("utf-8")
+
+        completion_req = urllib.request.Request(
+            "https://" + server_ip_port + "/api/complete?" + completion_req_query,
+            data=completion_data,
+            method="POST",
+        )
+        with urllib.request.urlopen(completion_req, context=ssl_ctx) as f:
+            pass
+        
+    except Exception as e:
+        traceback.print_exc()
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--nproc-execute", type=int, required=True)
+    # parser.add_argument("--nproc-execute", type=int, required=True)
     parser.add_argument(
         "--auth",
         help="Authentication token (defaults to ./auth.json in the same directory as this script)",
@@ -221,21 +222,21 @@ def main():
     scratch_dir = os.path.join(args.scratch_dir, f"executor-{scratch_uuid}")
     os.makedirs(scratch_dir, exist_ok=True)
 
-    execute_queue = multiprocessing.Queue(1)
-    complete_queue = multiprocessing.Queue(1)
+    # execute_queue = multiprocessing.Queue(1)
+    # complete_queue = multiprocessing.Queue(1)
 
-    claim_proc = multiprocessing.Process(target=claim_worker, args=(execute_queue, auth, scratch_dir))
+    claim_proc = multiprocessing.Process(target=main_runner, args=(auth, scratch_dir))
     claim_proc.start()
     
-    execute_procs = [
-        multiprocessing.Process(target=execute_worker, args=(execute_queue, complete_queue, i))
-        for i in range(args.nproc_execute)
-    ]
-    for proc in execute_procs:
-        proc.start()
+    # execute_procs = [
+    #     multiprocessing.Process(target=execute_worker, args=(execute_queue, complete_queue, i))
+    #     for i in range(args.nproc_execute)
+    # ]
+    # for proc in execute_procs:
+    #     proc.start()
     
-    complete_proc = multiprocessing.Process(target=complete_worker, args=(complete_queue, auth))
-    complete_proc.start()
+    # complete_proc = multiprocessing.Process(target=complete_worker, args=(complete_queue, auth))
+    # complete_proc.start()
 
     claim_proc.join()
 

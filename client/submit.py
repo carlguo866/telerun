@@ -51,6 +51,30 @@ server_ip_port = "6106-telerun.csail.mit.edu:4443"
 
 poll_interval = 0.25 # seconds
 
+def print_response(response):
+    result = json.loads(response["result"])["result_json"]
+    if result["success"]:
+        print("Job completed successfully.")
+    else:
+        print("Job failed.")
+    print()
+    print("--- Execution log:")
+    print()
+    print(result["execute_log"])
+    
+    
+def get_last_complete_job(username, token, ssl_ctx):
+    query_params = {"username": username, "token": token}
+    url_query = urllib.parse.urlencode(query_params)
+    url = "https://" + server_ip_port + "/api/last_complete?" + url_query
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, context=ssl_ctx) as f:
+        response = json.load(f)
+        if response["success"]:
+            print("Last completed job:")
+            print_response(response)
+            
+
 def submit_job(username, token, file_path, script_args, ssl_ctx, override_pending=False):
     query_params = {"username": username, "token": token}
     if override_pending:
@@ -110,6 +134,10 @@ def main():
 
     source = args.file
     ssl_ctx = ssl.create_default_context(cadata=server_cert)
+    
+    last_complete_job = get_last_complete_job(username, token, ssl_ctx)
+    
+    
     job_id = submit_job(username, token, source, script_args, ssl_ctx, override_pending=args.override_pending)
     if job_id is None:
         print("You already have a pending job. Pass '--override-pending' if you want to replace it.")
@@ -126,6 +154,8 @@ def main():
             break
         try:
             time.sleep(poll_interval)
+            last_complete_job = get_last_complete_job(username, token, ssl_ctx)
+                
             url_query = urllib.parse.urlencode({"username": username, "token": token, "job_id": job_id})
             req = urllib.request.Request(
                 "https://" + server_ip_port + "/api/status?" + url_query,
@@ -140,32 +170,32 @@ def main():
             elif state == "claimed":
                 if not already_claimed:
                     print("Compiling and running, took {:.2f} seconds to be claimed.".format(time.time() - old_time)) 
-                    print("This may take a while, please do not close this window, as your job will be lost.")
                     already_claimed = True
                 continue
             elif state == "complete":
                 # TODO: Don't double-nest JSON!
-                result = json.loads(response["result"])["result_json"]
-                if result["success"]:
-                    print("Job completed successfully.")
-                else:
-                    print("Job failed.")
-                print()
-                print("--- Execution log:")
-                print()
-                print(result["execute_log"])
+                print_response(response)
+                
+                req = urllib.request.Request(
+                    "https://" + server_ip_port + "/api/reported?" + url_query,
+                    method="POST",
+                )    
+                with urllib.request.urlopen(req, context=ssl_ctx) as f:
+                    response = json.load(f)
+                    print("Reported job completion.")
                 break
         except KeyboardInterrupt as e: 
-            print("Keyboard Interrupted. Remove job from server.")
-            url_query = urllib.parse.urlencode({"username": username, "token": token, "job_id": job_id})
-            req = urllib.request.Request(
-                "https://" + server_ip_port + "/api/delete?" + url_query,
-                method="POST",
-            )
-            with urllib.request.urlopen(req, context=ssl_ctx) as f:
-                response = json.load(f)
-                if response["success"]:
-                    print("Job removed successfully.")
+            print("Keyboard Interrupted.")
+            if not already_claimed: 
+                url_query = urllib.parse.urlencode({"username": username, "token": token, "job_id": job_id})
+                req = urllib.request.Request(
+                    "https://" + server_ip_port + "/api/delete?" + url_query,
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, context=ssl_ctx) as f:
+                    response = json.load(f)
+                    if response["success"]:
+                        print("Job removed successfully.")
             break
         except Exception as e:
             traceback.print_exc()

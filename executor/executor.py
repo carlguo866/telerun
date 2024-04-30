@@ -129,6 +129,8 @@ def main_runner(auth, scratch_dir: str):
 
             complete_job = execute_worker(ExecuteJob(job_id, job_dir, source_path, job_args), 1)
             complete_worker(complete_job, auth)
+            
+            print("Finish job", job_id)
         except Exception as e:
             traceback.print_exc()
             continue
